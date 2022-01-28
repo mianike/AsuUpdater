@@ -88,6 +88,7 @@
                         </Style.Triggers>
                     </Style>
                 </StackPanel.Style>
+                <TextBlock Text="{Binding Message, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="14" Margin="15,0,15,30"/>
                 <CheckBox VerticalAlignment="Bottom" Margin="0,0,0,5" IsChecked="{Binding CreateShortcutOnCompletion}" Content="Создать ярлык на рабочем столе" Foreground="#FF333333" FontSize="14"/>
                 <CheckBox VerticalAlignment="Bottom" Margin="0,0,0,10" IsChecked="{Binding StartArmOnCompletion}" Content="Запустить программу по закрытию" Foreground="#FF333333" FontSize="14"/>
                 <Button VerticalAlignment="Bottom" Height="30" Width="150" Content="Завершить" FontWeight="Normal" FontFamily="Calibri" Foreground="#FF101010" FontSize="16">

@@ -738,6 +738,8 @@ namespace AsuUpdater.Classes
                     _thread = null;
                     EmergencyStop();
                     _logger.Info("Программа обновления закрыта");
+                    LogManager.DisableLogging();
+                    DirectoryCopy($"{AppDomain.CurrentDomain.BaseDirectory}\\Logs", $"{_parentCurrentDirectoryPath}\\{_endDirectory}\\AsuUpdater\\Logs", false, false);
                 }
                 else
                 {
