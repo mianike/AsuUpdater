@@ -6,7 +6,6 @@ namespace AsuUpdater
 {
     public partial class MainWindow : Window
     {
-        private UpdaterViewModel _temp;
         public MainWindow()
         {
             InitializeComponent();
@@ -19,12 +18,6 @@ namespace AsuUpdater
 
             updaterViewModel.Close += Close;
             Closing += updaterViewModel.OnWindowClosing;
-            _temp = updaterViewModel;
-        }
-
-        private void ButtonBase_OnClick(object sender, RoutedEventArgs e)
-        {
-            _temp.Test();
         }
     }
 

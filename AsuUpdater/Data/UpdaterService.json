@@ -1,7 +1,12 @@
 {
-  "ServerAddress": "192.168.96.27",
-  "ServerDirectoryPath": "D$\\PROJECT\\ARM\\ARM_2022_01_11",
-  "UserName": "KipSql",
-  "UserPassword": "KipSql1",
-  "DestinDirectoryName": "TempFolderForUpdater"
+  "ServerAddress": "192.168.96.27", //IP-адрес сервера (Используется этот IP-адрес, если при запуске аргументом не был передан другой)
+  "ActualVersionPath": "D$\\PROJECT\\ARM\\ARM", //Путь к актуальной версии программы на сервере (двойная косая черта для иерархии)
+  "UserName": "KipSql", //Имя пользователя через которого осуществляем вход
+  "UserPassword": "KipSql1", //Пароль пользователя через которого осуществляем вход
+  "AboutVersionPath": "Data\\AboutVersion.json", //Путь и название файла внутри актуальной программы содержащий данные о версии
+  "VersionKeyInAboutVersionFile": "Version", //Имя ключа для десериализации номера версии из файла о версии
+  "WhatIsNewKeyInAboutVersionFile": "WhatIsNew", //Имя ключа для десериализации данных о том, что нового в версии из файла о версии
+  "UpdatedProgram": "ARM", //Целевая папка для обновления (используется для конечного названия папки)
+  "RuntimeFileName": "ArmFactory_1951.exe", //Имя исполняемого файла в целевой папке
+  "FolderForOldVersion": "Old" //Название папки для хранения устаревших версий. Если поле пустое, то старая версия будет удаляться
 }

@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Windows;
 using Newtonsoft.Json;
 using NLog;
 
@@ -21,7 +20,7 @@ namespace AsuUpdater.Classes
 
         private void Parsing()
         {
-            using (StreamReader sr = new StreamReader("Data\\UpdaterService.json"))
+            using (StreamReader sr = new StreamReader($"{AppDomain.CurrentDomain.BaseDirectory}\\Data\\UpdaterService.json"))
             {
                 string json = sr.ReadToEnd();
                 _serviceDict = JsonConvert.DeserializeObject<Dictionary<string, string>>(json);

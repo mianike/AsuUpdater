@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using AsuUpdater.Classes;
 using NLog;
 
 namespace AsuUpdater
@@ -18,12 +19,10 @@ namespace AsuUpdater
 
         private void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)
         {
-            Exception exception = (Exception)e.ExceptionObject;
+            var exception = (Exception)e.ExceptionObject;
             Directory.CreateDirectory("Logs");
-            File.AppendAllText("Logs\\log.txt", $"{DateTime.Now} - {e.ExceptionObject}");
-            File.AppendAllText("Logs\\logCut.txt", $"{DateTime.Now} - {exception.Message}\n");
-            LogManager.GetCurrentClassLogger().Fatal($"{exception.Message}");
-            MessageBox.Show($"Что-то пошло не так\n{exception.Message}", "Критическое исключение", MessageBoxButton.OK, MessageBoxImage.Error, MessageBoxResult.OK, MessageBoxOptions.DefaultDesktopOnly);
+            LogManager.GetCurrentClassLogger().Fatal($"{exception}");
+            MessageBox.Show($"Что-то пошло не так.\nВо время работы программы возникла критическая ошибка\n\n{exception.Message}.\nПроцесс обновления прерван.\n\nОбновитесь вручную или попробуйте ещё раз", "Критическая ошибка", MessageBoxButton.OK, MessageBoxImage.Error, MessageBoxResult.OK, MessageBoxOptions.DefaultDesktopOnly);
             MainWindow?.Close();
         }
 
@@ -37,6 +36,8 @@ namespace AsuUpdater
                 MessageBox.Show("Запущено более одной копии программного обеспечения", "Ошибка запуска", MessageBoxButton.OK, MessageBoxImage.Warning, MessageBoxResult.OK, MessageBoxOptions.DefaultDesktopOnly);
                 currentProcess.Kill();
             }
+
+            UpdaterViewModel.ServerAddressFromArgument = args.Args?.Length > 0 ? args.Args[0] : null;
         }
     }
 }
