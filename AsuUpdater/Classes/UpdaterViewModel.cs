@@ -4,7 +4,6 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.ServiceModel;
 using System.Text;
 using System.Threading;
 using System.Windows;
@@ -12,17 +11,23 @@ using Newtonsoft.Json;
 using NLog;
 using IWshRuntimeLibrary;
 using System.IO.Compression;
+using System.Linq;
+using File = System.IO.File;
 
 namespace AsuUpdater.Classes
 {
-    public class UpdaterViewModel : INotifyPropertyChanged
+    internal class UpdaterViewModel : INotifyPropertyChanged
     {
         public static string ServerAddressFromArgument { get; set; }
+        public static string ActualVersionPathFromArgument { get; set; }
+        public static string UserNameFromArgument { get; set; }
+        public static string UserPasswordFromArgument { get; set; }
 
         public event PropertyChangedEventHandler PropertyChanged;
         public event Action Close;
 
         private readonly Logger _logger;
+        private Thread _thread;
 
         private readonly string _serverAddress;
         private readonly string _sourceDirectoryPath;
@@ -35,13 +40,16 @@ namespace AsuUpdater.Classes
         private readonly string _versionKey;
         private readonly string _whatIsNewKey;
         private readonly string _runtimeFileName;
-        private readonly string _endingForTempFolder = "_Backup";
 
+        private string _partName;
         private double _totalFileCountFromServer;
         private double _copiedFileCountFromServer;
         private long _totalFileSizeFromServer;
         private long _copiedFileSizeFromServer;
-        private Thread _thread;
+        private int _skippedFiles;
+        private int _copiedFiles;
+        private int _deletedFiles;
+        private bool _wasConnected;
 
         private double _progressValue;
         public double ProgressValue
@@ -191,15 +199,23 @@ namespace AsuUpdater.Classes
             try
             {
                 _logger = Service.GetInstance().GetLogger();
-                _logger.Info($"{Process.GetCurrentProcess().ProcessName} открыт. Версия {Release.GetInstance().GetVersion()}");
+
+                //Отключаем логирование на время чистки логов
+                LogManager.DisableLogging();
+                var clearLogsStatus = ClearLogs($"{AppDomain.CurrentDomain.BaseDirectory}Logs");
+                LogManager.EnableLogging();
+
+                _logger.Info($"{Process.GetCurrentProcess().ProcessName} версии {Release.GetInstance().GetVersion()} открыт");
+                _logger.Info($"При открытии была предпринята попытка очистки логов. Статус очистки: {clearLogsStatus}");
 
                 _serverAddress = ServerAddressFromArgument ?? Service.GetInstance().GetServiceDict()["ServerAddress"];
+                string actualVersionPath = ActualVersionPathFromArgument ?? Service.GetInstance().GetServiceDict()["ActualVersionPath"];
                 _parentCurrentDirectoryPath = Directory.GetParent(Directory.GetParent(AppDomain.CurrentDomain.BaseDirectory).FullName).FullName;
-                _sourceDirectoryPath = $"\\\\{_serverAddress}\\{Service.GetInstance().GetServiceDict()["ActualVersionPath"]}";
+                _sourceDirectoryPath = $"\\\\{_serverAddress}\\{actualVersionPath}";
                 _endDirectory = $"{Service.GetInstance().GetServiceDict()["UpdatedProgram"]}";
                 _directoryForOldVersion = Service.GetInstance().GetServiceDict()["FolderForOldVersion"];
-                _userName = Service.GetInstance().GetServiceDict()["UserName"];
-                _userPassword = Service.GetInstance().GetServiceDict()["UserPassword"];
+                _userName = UserNameFromArgument ?? Service.GetInstance().GetServiceDict()["UserName"];
+                _userPassword = UserPasswordFromArgument ?? Service.GetInstance().GetServiceDict()["UserPassword"];
                 _aboutVersionPath = $"{Service.GetInstance().GetServiceDict()["AboutVersionPath"]}";
                 _versionKey = Service.GetInstance().GetServiceDict()["VersionKeyInAboutVersionFile"];
                 _whatIsNewKey = Service.GetInstance().GetServiceDict()["WhatIsNewKeyInAboutVersionFile"];
@@ -209,9 +225,12 @@ namespace AsuUpdater.Classes
                 CreateShortcutOnCompletion = true;
 
                 _logger.Info($"Успешная инициализация {this.GetType().Name}\n\tРодительская директория для работы с папками: {_parentCurrentDirectoryPath}" +
-                             $"\n\tАдрес сервера ({(ServerAddressFromArgument != null ? "Передан аргументом обновляемой программой" : "Обновляемой программой аргументом не передан, получен из UpdaterService.json")}) {_serverAddress}" +
-                             $"\n\tПолный путь к актуальной версии: {_sourceDirectoryPath}\n\tЦелевая папка для обновления: {_endDirectory}\n\tИмя пользователя для входа: {_userName}" +
-                             $"\n\tПароль пользователя для входа: {_userPassword}\n\tПуть к файлу о версии внутри актуальной программы: {_aboutVersionPath}" +
+                             $"\n\tАдрес сервера ({(ServerAddressFromArgument != null ? "Передан аргументом обновляемой программой" : "Обновляемой программой аргументом не передан, получен из UpdaterService.json")}): {_serverAddress}" +
+                             $"\n\tПуть к актуальной версии программы на сервере ({(ActualVersionPathFromArgument != null ? "Передан аргументом обновляемой программой" : "Обновляемой программой аргументом не передан, получен из UpdaterService.json")}): {actualVersionPath}" +
+                             $"\n\tПолный путь к актуальной версии: {_sourceDirectoryPath}\n\tЦелевая папка для обновления: {_endDirectory}" +
+                             $"\n\tИмя пользователя для входа ({(UserNameFromArgument != null ? "Передано аргументом обновляемой программой" : "Обновляемой программой аргументом не передано, получено из UpdaterService.json")}): {_userName}" +
+                             $"\n\tПароль пользователя для входа ({(UserPasswordFromArgument!= null ? "Передан аргументом обновляемой программой" : "Обновляемой программой аргументом не передан, получен из UpdaterService.json")}): {_userPassword}" +
+                             $"\n\tПуть к файлу о версии внутри актуальной программы: {_aboutVersionPath}" +
                              $"\n\tИмя ключа для десериализации номера версии из файла о версии: {_versionKey}\n\tИмя ключа для десериализации данных о том, что нового в версии из файла о версии: {_whatIsNewKey}" +
                              $"\n\tНазвание папки для устаревших версий: {(!string.IsNullOrWhiteSpace(_directoryForOldVersion) ? _directoryForOldVersion : "Значение не задано. Старая версия при успешном обновлении будет удалена")}" +
                              $"\n\tНазвание исполняемого файла в целевой папке: {_runtimeFileName}");
@@ -226,42 +245,61 @@ namespace AsuUpdater.Classes
 
         private void StartUpdate()
         {
-            _thread = new Thread(UpdateAsync);
+            _thread = new Thread(Update);
             _thread.Start();
         }
 
-        public void UpdateAsync()
+        public void Update()
         {
             try
             {
                 UpdateProcessIsRunning = true;
-                var startUpdateDateTime = DateTime.Now;
+                DateTime startUpdateDateTime = DateTime.Now;
                 Message = "Инициализация…";
                 _logger.Info("Начат процесс обновления");
+
                 _logger.Info("Попытка высвободить подключение если мы уже подключены с текущими учетными данными");
                 var errorDisconnectMessage = DisconnectFromServer(_sourceDirectoryPath, true);
                 _logger.Info($"Статус высвобождения подключения: {errorDisconnectMessage ?? "Успешный разрыв соединения"}");
+
                 Message = $"Подключение к серверу {_serverAddress}…";
                 _logger.Info("Попытка подключения к серверу");
                 var errorConnectionMessage = NetworkShare.ConnectToShare(_sourceDirectoryPath, _userName, _userPassword);
                 if (string.IsNullOrWhiteSpace(errorConnectionMessage))
                 {
-                    Message = "Успешное подключение к серверу";
+                    _wasConnected = true;
                     _logger.Info("Успешное подключение к серверу");
 
-                    Message = "Создание бэкапа…";
-                    _logger.Info($"Создание бэкапа для {_endDirectory}");
-                    var copyResult = DirectoryCopy($"{_parentCurrentDirectoryPath}\\{_endDirectory}", $"{_parentCurrentDirectoryPath}\\{_endDirectory}{_endingForTempFolder}", false);
-                    if (string.IsNullOrWhiteSpace(copyResult))
+                    Message = "Получение данных об обновляемой версии…";
+                    _logger.Info("Попытка получения номера обновляемой версии");
+                    _partName = DeserializeJson($"{_parentCurrentDirectoryPath}\\{_endDirectory}\\{_aboutVersionPath}", _versionKey);
+                    if (!string.IsNullOrWhiteSpace(_partName))
                     {
-                        _logger.Info($"Успешное создание бэкапа для {_endDirectory}");
+                        _partName = _partName.Replace(".", "_");
+                        _logger.Info($"Успешное получение номера обновляемой версии: {_partName}");
                     }
                     else
                     {
-                        _logger.Warn($"Неудачное создание бэкапа для {_endDirectory}. {copyResult}");
+                        var currentDateTime = DateTime.Now;
+                        _partName = $"UPD_{currentDateTime.Year}{currentDateTime.Month.ToString("D2")}{currentDateTime.Day.ToString("D2")}_{currentDateTime.Hour.ToString("D2")}{currentDateTime.Minute.ToString("D2")}";
+                        _logger.Warn($"Не удалось получить номер обновляемой версии. Вместо номера обновляемой версии в названии при архивировании в папку со старыми версиями будет использоваться текущая дата и время: {_partName}");
+                    }
+                    _partName = $"_{_partName}";
+
+                    Message = "Создание резервной копии…";
+                    _logger.Info($"Попытка создания резервной копии для {_endDirectory}");
+                    var copyResult = DirectoryCopy($"{_parentCurrentDirectoryPath}\\{_endDirectory}", $"{_parentCurrentDirectoryPath}\\{_endDirectory}{_partName}", false);
+                    if (string.IsNullOrWhiteSpace(copyResult))
+                    {
+                        _logger.Info($"Успешное создание резервной копии для {_endDirectory}. Резервная копия хранится в {_endDirectory}{_partName}");
+                    }
+                    else
+                    {
+                        _logger.Warn($"Неудачное создание резервной копии для {_endDirectory}. {copyResult}");
                     }
 
                     Message = "Получение данных о новой версии…";
+                    _logger.Info("Попытка получения данных о новой версии");
                     WhatIsNew = DeserializeJson($"{_sourceDirectoryPath}\\{_aboutVersionPath}", _whatIsNewKey);
                     if (!string.IsNullOrWhiteSpace(WhatIsNew))
                     {
@@ -270,7 +308,7 @@ namespace AsuUpdater.Classes
                     else
                     {
                         WhatIsNew = "Исправлены ошибки, повышена стабильность работы";
-                        _logger.Warn($"Не удалось получить данные о том, что нового в актуальной версии. Используется значение по умолчанию {WhatIsNew}");
+                        _logger.Warn($"Не удалось получить данные о том, что нового в актуальной версии. Используется значение по умолчанию: {WhatIsNew}");
                     }
                     NewVersion = DeserializeJson($"{_sourceDirectoryPath}\\{_aboutVersionPath}", _versionKey);
                     if (!string.IsNullOrWhiteSpace(NewVersion))
@@ -284,59 +322,54 @@ namespace AsuUpdater.Classes
                     }
 
                     Message = "Подготовка к копированию…";
+                    _logger.Info($"Подготовка копирования файлов с сервера {_sourceDirectoryPath} в {_parentCurrentDirectoryPath}\\{_endDirectory}");
+                    var startCopyDateTime = DateTime.Now;
                     copyResult = DirectoryCopy(_sourceDirectoryPath, $"{_parentCurrentDirectoryPath}\\{_endDirectory}", true);
                     if (string.IsNullOrWhiteSpace(copyResult))
                     {
-                        _logger.Info($"Успешное завершение копирования {_sourceDirectoryPath}. Затраченное время - {(DateTime.Now - startUpdateDateTime).TotalSeconds.ToString("F1")} сек.");
+                        _logger.Info($"Успешное завершение копирования файлов с сервера {_sourceDirectoryPath} в {_parentCurrentDirectoryPath}\\{_endDirectory}. Затраченное время на копирование: {(DateTime.Now - startCopyDateTime).TotalSeconds.ToString("F1")} сек.\n" +
+                                     $"Удаленные файлы из целевой папки: {_deletedFiles}, пропущенные файлы при копировании: {_skippedFiles}, скопированные файлы (в том числе и с перезаписью): {_copiedFiles}");
                     }
                     else
                     {
-                        _logger.Warn($"Неудача копирования {_sourceDirectoryPath}. {copyResult}");
+                        throw new Exception($"Неудача копирования файлов с сервера. {copyResult}");
                     }
                 }
                 else
                 {
-                    throw new EndpointNotFoundException($"При попытке подключения к серверу возникла ошибка: {errorConnectionMessage}");
+                    UpdateProcessIsRunning = false;
+                    EmergencySituation = true;
+                    _logger.Error($"При попытке подключения к серверу возникла ошибка {errorConnectionMessage}. Процесс обновления прерван");
+                    AlarmMessage = $"При попытке подключения к серверу возникла ошибка {errorConnectionMessage}";
+                    EmergencyCompletion = true;
+                    return;
                 }
 
                 Message = "Закрытие соединения…";
+                _logger.Info("Попытка закрыть соединения");
                 errorDisconnectMessage = DisconnectFromServer(_sourceDirectoryPath, false);
                 _logger.Info($"Закрытие соединения: {errorDisconnectMessage ?? "Успешный разрыв соединения"}");
 
+                ProgressValue = 99.9;
                 Message = "Завершение обновления…";
-                _logger.Info($"Начат процесс переноса папки со старой версией {_endDirectory}{_endingForTempFolder}");
                 if (!string.IsNullOrWhiteSpace(_directoryForOldVersion))
                 {
-                    string partName = DeserializeJson($"{_parentCurrentDirectoryPath}\\{_endDirectory}{_endingForTempFolder}\\{_aboutVersionPath}", _versionKey);
-                    if (!string.IsNullOrWhiteSpace(partName))
+                    _logger.Info($"Подготовка архивирования папки с резервной копией {_endDirectory}{_partName} в папку {_directoryForOldVersion}");
+                    var zipResult = ArchivingOldVersion($"{_parentCurrentDirectoryPath}\\{_endDirectory}{_partName}", $"{_parentCurrentDirectoryPath}\\{_directoryForOldVersion}\\{_endDirectory}{_partName}.zip");
+                    if (string.IsNullOrWhiteSpace(zipResult))
                     {
-                        _logger.Info($"Успешное получение номера обновляемой версии: {partName}");
+                        _logger.Info($"Успешное завершение архивирования папки с резервной копией {_endDirectory}{_partName} в {_directoryForOldVersion}\\{_endDirectory}{_partName}.zip");
                     }
                     else
                     {
-                        _logger.Warn("Не удалось получить номер обновляемой версии. Вместо номера обновляемой версии в названии при переносе в папку со старыми версиями будет использоваться текущая дата и время");
-                        var currentDateTime = DateTime.Now;
-                        partName = $"UPD_{currentDateTime.Year}{currentDateTime.Month.ToString("D2")}{currentDateTime.Day.ToString("D2")}.{currentDateTime.Hour.ToString("D2")}{currentDateTime.Minute.ToString("D2")}";
-                    }
-
-                    partName = $"_{partName}";
-
-                    var copyResult = DirectoryCopy($"{_parentCurrentDirectoryPath}\\{_endDirectory}{_endingForTempFolder}", $"{_parentCurrentDirectoryPath}\\{_directoryForOldVersion}\\{_endDirectory}{partName}", false);
-                    if (string.IsNullOrWhiteSpace(copyResult))
-                    {
-                        _logger.Info($"Успешное завершение копирования старой версии из {_endDirectory}{_endingForTempFolder} в {_directoryForOldVersion}\\{_endDirectory}{partName}");
-                    }
-                    else
-                    {
-                        _logger.Warn($"Неудача копирования старой версии из {_endDirectory}{_endingForTempFolder} в {_directoryForOldVersion}\\{_endDirectory}{partName}. {copyResult}");
+                        _logger.Warn($"Неудача архивирования папки с резервной копией {_endDirectory}{_partName} в {_directoryForOldVersion}\\{_endDirectory}{_partName}.zip. {zipResult}");
                     }
                 }
                 else
                 {
-                    _logger.Warn($"Конечная папка {_directoryForOldVersion} не задана в {_aboutVersionPath}. Папка со старой версией {_endDirectory}{_endingForTempFolder} будет удалена");
+                    _logger.Warn($"Папка для хранения устаревших версий не задана в конфигурационном файле. Резервная копия {_endDirectory}{_partName} при её наличии будет удалена");
                 }
-                ProgressValue = 99.9;
-                DirectoryDelete($"{ _parentCurrentDirectoryPath}\\{_endDirectory}{_endingForTempFolder}");
+                DirectoryDelete($"{_parentCurrentDirectoryPath}\\{_endDirectory}{_partName}");
 
                 ProgressValue = 100.0;
                 Message = $"Успешное завершение обновления.\nЗатраченное время на обновление: {(DateTime.Now - startUpdateDateTime).TotalSeconds.ToString("F1")} сек.";
@@ -356,80 +389,95 @@ namespace AsuUpdater.Classes
             }
         }
 
+        private string ArchivingOldVersion(string sourceDirectoryPath, string destinZipPath)
+        {
+            try
+            {
+                var directory = new DirectoryInfo(sourceDirectoryPath);
+                if (!directory.Exists)
+                {
+                    throw new DirectoryNotFoundException($"Исходной папки для архивирования ({sourceDirectoryPath}) не существует или не может быть найдена");
+                }
 
-        //TODO: Реализровать копирование через архивы
+                if (directory.GetFiles("*.*", SearchOption.AllDirectories).Length > 0)
+                {
+                    var spaceMessage = GetNotEnoughSpace(sourceDirectoryPath, false);
+                    if (!string.IsNullOrWhiteSpace(spaceMessage))
+                    {
+                        throw new IOException(spaceMessage);
+                    }
 
-        //private string ZipCopy(string sourceDirectoryPath, string destinDirectoryPath)
-        //{
-        //    try
-        //    {
-        //        _logger.Info($"Подготовка к созданию и копированию архива {sourceDirectoryPath} в {destinDirectoryPath}");
-        //        var directory = new DirectoryInfo(sourceDirectoryPath);
-        //        if (!directory.Exists)
-        //        {
-        //            throw new DirectoryNotFoundException(
-        //                $"Исходной папки не существует или не может быть найдена: {sourceDirectoryPath}");
-        //        }
+                    if (File.Exists(destinZipPath))
+                    {
+                        _logger.Trace($"Файл {destinZipPath} уже существует");
+                        FileDelete(new FileInfo(destinZipPath));
+                    }
 
-        //        //Один раз получаем общее количество файлов для копирования
-        //        if (_totalFileCountFromServer == 0)
-        //        {
-        //            _totalFileCountFromServer = directory.GetFiles("*.*", SearchOption.AllDirectories).Length;
-        //            _logger.Info(
-        //                $"Общее количество файлов для копирования в {sourceDirectoryPath}: {_totalFileCountFromServer}");
-        //        }
+                    Directory.CreateDirectory($"{_parentCurrentDirectoryPath}\\{_directoryForOldVersion}");
+                    _logger.Info($"Начат процесс архивирования {sourceDirectoryPath} в {destinZipPath}");
+                    ZipFile.CreateFromDirectory(sourceDirectoryPath, $"{destinZipPath}");
+                    _logger.Info($"Успешное завершение архивирования {sourceDirectoryPath} в {destinZipPath}");
 
-        //        if (_totalFileCountFromServer > 0)
-        //        {
-        //            Message = "Проверка свободного места на диске…";
-        //            var spaceMessage = GetNotEnoughSpace(sourceDirectoryPath, true);
-        //            if (!string.IsNullOrWhiteSpace(spaceMessage))
-        //            {
-        //                throw new IOException(spaceMessage);
-        //            }
+                    //В папке со старыми версиями оставляем только 2 последних архива
+                    var zipFiles = new DirectoryInfo(new FileInfo(destinZipPath).Directory.FullName).GetFiles("*.zip");
+                    if (zipFiles.Count() > 2)
+                    {
+                        _logger.Info("В папке со старыми версиями более 2 zip-файлов. Будут удалены все старые версии кроме 2 последних архивов");
+                        DateTime firstDateTime = new DateTime();
+                        DateTime secondDateTime = new DateTime();
 
-        //            DirectoryDelete(destinDirectoryPath, true);
+                        //Поиск 2 последних использовавшихся архивов
+                        foreach (var file in zipFiles)
+                        {
+                            if (file.LastWriteTime > firstDateTime)
+                            {
+                                secondDateTime = firstDateTime;
+                                firstDateTime = file.LastWriteTime;
+                            }
+                        }
 
-        //            ZipFile.CreateFromDirectory(sourceDirectoryPath, $"{destinDirectoryPath}Zip");
-        //            ZipFile.ExtractToDirectory($"{destinDirectoryPath}Zip", destinDirectoryPath);
-        //            return null;
-        //        }
-        //        else
-        //        {
-        //            throw new FileNotFoundException(
-        //                $"В исходной папке не существуют файлы или не могут быть найдены: {sourceDirectoryPath}");
-        //        }
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        return
-        //            $"При копировании файлов из {sourceDirectoryPath} в {destinDirectoryPath} возникла ошибка {ex.Message}";
-        //    }
-        //}
+                        foreach (var file in zipFiles)
+                        {
+                            if (file.LastWriteTime < secondDateTime)
+                            {
+                                FileDelete(file);
+                            }
+                        }
+                    }
+                    return null;
+                }
+                throw new FileNotFoundException($"В исходной папке для архивирования ({sourceDirectoryPath}) не существуют файлы или не могут быть найдены");
+            }
+            catch (Exception ex)
+            {
+                return $"При создании архива {destinZipPath} для {sourceDirectoryPath} возникла ошибка. {ex.Message}";
+            }
+        }
 
         private string DirectoryCopy(string sourceDirectoryPath, string destinDirectoryPath, bool isCopyFromServer, bool сheckSpace = true)
         {
             try
             {
-                _logger.Info($"Подготовка к копированию {sourceDirectoryPath} в {destinDirectoryPath}");
-                var directory = new DirectoryInfo(sourceDirectoryPath);
-                if (!directory.Exists)
+                var sourceDirectory = new DirectoryInfo(sourceDirectoryPath);
+                if (!sourceDirectory.Exists)
                 {
-                    throw new DirectoryNotFoundException($"Исходной папки не существует или не может быть найдена: {sourceDirectoryPath}");
+                    throw new DirectoryNotFoundException($"Исходной папки для копирования ({sourceDirectoryPath}) не существует или не может быть найдена");
                 }
+                var destinDirectory = new DirectoryInfo(destinDirectoryPath);
 
-                //Один раз получаем общее количество файлов для копирования
+                //Один раз получаем общее количество файлов для копирования с сервера
                 if (_totalFileCountFromServer == 0 && isCopyFromServer)
                 {
-                    _totalFileCountFromServer = directory.GetFiles("*.*", SearchOption.AllDirectories).Length;
-                    _logger.Info($"Общее количество файлов для копирования в {sourceDirectoryPath}: {_totalFileCountFromServer}");
+                    _totalFileCountFromServer = sourceDirectory.GetFiles("*.*", SearchOption.AllDirectories).Length;
+
+                    _logger.Info(
+                        $"Общее количество файлов для копирования с папки-источника на сервере {sourceDirectoryPath}: {_totalFileCountFromServer}.\n{(destinDirectory.Exists ? $"Общее количество файлов в целевой папке {destinDirectory} до начала копирования: {destinDirectory.GetFiles("*.*", SearchOption.AllDirectories).Length}" : "Целевой папки до начала копирования не существует")}");
                 }
 
                 if (_totalFileCountFromServer > 0 || !isCopyFromServer)
                 {
                     if (сheckSpace)
                     {
-                        Message = "Проверка свободного места на диске…";
                         var spaceMessage = GetNotEnoughSpace(sourceDirectoryPath, isCopyFromServer);
                         if (!string.IsNullOrWhiteSpace(spaceMessage))
                         {
@@ -437,31 +485,92 @@ namespace AsuUpdater.Classes
                         }
                     }
 
-                    DirectoryDelete(destinDirectoryPath, isCopyFromServer);
-
-                    Message = "Создание папок…";
-                    Directory.CreateDirectory(destinDirectoryPath);
                     if (isCopyFromServer)
                     {
-                        _logger.Info($"Создана папка {destinDirectoryPath}");
+                        Message = "Синхронизация каталогов…";
+                    }
+                    var filesToCopy = sourceDirectory.GetFiles();
+                    var subDirectoriesToCopy = sourceDirectory.GetDirectories();
+                    if (destinDirectory.Exists)
+                    {
+                        //Удаляем файлы и папки из целевой папки, если их нет в папке-источнике для копирования
+                        var existFiles = destinDirectory.GetFiles();
+                        foreach (var existFile in existFiles)
+                        {
+                            if (sourceDirectory.GetFiles(existFile.Name).Length == 0)
+                            {
+                                _logger.Trace($"Файл {existFile.Name} не найден в папке-источнике для копирования по такому относительному пути ({sourceDirectoryPath}\\{existFile.Name}) и будет удален");
+                                FileDelete(existFile);
+                                if (isCopyFromServer)
+                                {
+                                    _deletedFiles++;
+                                }
+                            }
+                        }
+                        var existsDirectories = destinDirectory.GetDirectories();
+                        foreach (var existsDirectory in existsDirectories)
+                        {
+                            if (sourceDirectory.GetDirectories(existsDirectory.Name).Length == 0)
+                            {
+                                _logger.Trace($"Папка {existsDirectory.FullName} не найдена в папке-источнике для копирования по такому относительному пути ({sourceDirectoryPath}\\{existsDirectory.Name}) и будет удалена");
+                                DirectoryDelete(existsDirectory.FullName);
+                            }
+                        }
                     }
 
-                    var files = directory.GetFiles();
-                    foreach (var file in files)
+                    Directory.CreateDirectory(destinDirectoryPath);
+                    //Копируем из источника только те файлы, которых нет в целевой папке или которые отличаются по размеру и дате изменения
+                    foreach (var fileToCopy in filesToCopy)
                     {
-                        if (isCopyFromServer)
+                        var existFile = destinDirectory.Exists ? destinDirectory.GetFiles(fileToCopy.Name) : null;
+                        if (existFile?.Length > 0 && existFile.First().Length == fileToCopy.Length && existFile.First().LastWriteTimeUtc == fileToCopy.LastWriteTimeUtc)
                         {
-                            _logger.Info($"Начато копирование {file.Name}");
-                            Message = $"Копирование {file.Name}…";
+                            _logger.Trace($"Пропущено копирование файла {fileToCopy.Name}. Данный файл с размером {fileToCopy.Length} и датой изменения (UTC) {fileToCopy.LastWriteTimeUtc} уже есть в каталоге {destinDirectoryPath} по такому относительному пути {destinDirectoryPath}\\{fileToCopy.Name}");
+                            if (isCopyFromServer)
+                            {
+                                _skippedFiles++;
+                            }
                         }
-                        var filePath = Path.Combine(destinDirectoryPath, file.Name);
-                        file.CopyTo(filePath, true);
+                        else
+                        {
+                            _logger.Trace($"Начато копирование {fileToCopy.Name}");
+                            if (isCopyFromServer)
+                            {
+                                Message = $"Копирование {fileToCopy.Name}…";
+                            }
+                            var filePath = Path.Combine(destinDirectoryPath, fileToCopy.Name);
+                            while (true)
+                            {
+                                try
+                                {
+                                    fileToCopy.CopyTo(filePath, true);
+                                    _logger.Trace($"Завершено копирование {fileToCopy.Name}");
+                                    if (isCopyFromServer)
+                                    {
+                                        _copiedFiles++;
+                                    }
+                                    break;
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.Warn($"При попытке копирования или замены файла {fileToCopy.Name} возникла ошибка {ex.Message}");
+                                    if (MessageBoxResult.OK == MessageBox.Show($"Ошибка доступа к файлу {fileToCopy.Name}.\nВозможно, файл используется.\n{ex.Message}.\n\nЗакройте файл и нажмите ОК для повтора.\nНажмите Отмена чтобы пропустить файл", "Ошибка доступа", MessageBoxButton.OKCancel, MessageBoxImage.Warning, MessageBoxResult.OK, MessageBoxOptions.DefaultDesktopOnly))
+                                    {
+                                        _logger.Trace($"Пользователем предпринята ещё одна попытка копирования или замены файла {fileToCopy.Name}");
+                                    }
+                                    else
+                                    {
+                                        _logger.Warn($"Пользователь отменил копирование или замену файла {fileToCopy.Name} при ошибке доступа");
+                                        throw;
+                                    }
+                                }
+                            }
+                        }
 
                         if (isCopyFromServer)
                         {
-                            _logger.Info($"Завершено копирование {file.Name}");
                             _copiedFileCountFromServer++;
-                            _copiedFileSizeFromServer += file.Length;
+                            _copiedFileSizeFromServer += fileToCopy.Length;
 
                             double progressValue;
                             if (_totalFileSizeFromServer > 0 && _copiedFileSizeFromServer > 0)
@@ -476,19 +585,14 @@ namespace AsuUpdater.Classes
                         }
                     }
 
-                    Message = "Получение подпапок…";
-                    var subDirectories = directory.GetDirectories();
-                    foreach (var subDirectory in subDirectories)
+                    foreach (var subDirectory in subDirectoriesToCopy)
                     {
                         var directoryPath = Path.Combine(destinDirectoryPath, subDirectory.Name);
                         DirectoryCopy(subDirectory.FullName, directoryPath, isCopyFromServer, false);
                     }
                     return null;
                 }
-                else
-                {
-                    throw new FileNotFoundException($"В исходной папке не существуют файлы или не могут быть найдены: {sourceDirectoryPath}");
-                }
+                throw new FileNotFoundException($"В исходной папке для копирования ({sourceDirectoryPath}) не существуют файлы или не могут быть найдены");
             }
             catch (Exception ex)
             {
@@ -496,37 +600,49 @@ namespace AsuUpdater.Classes
                 {
                     throw;
                 }
-                return $"При копировании файлов из {sourceDirectoryPath} в {destinDirectoryPath} возникла ошибка {ex.Message}";
+                return $"При копировании файлов из {sourceDirectoryPath} в {destinDirectoryPath} возникла ошибка. {ex.Message}";
             }
         }
 
         private string GetNotEnoughSpace(string directoryPath, bool isCopyFromServer)
         {
-            try
+            while (true)
             {
-                var drive = Path.GetPathRoot(AppDomain.CurrentDomain.BaseDirectory);
-                var userName = Environment.UserName;
-                _logger.Info($"Попытка определить достаточно ли места для текущего пользователя {userName} на текущем диске {drive} для копирования папки {directoryPath}");
-                var freeSpaceOnCurrentDrive = new DriveInfo(drive).AvailableFreeSpace;
-                _logger.Info($"Для текущего пользователя {userName} на текущем диске {drive} доступно {((double)freeSpaceOnCurrentDrive / 1024 / 1024).ToString("F2")} МБ ({freeSpaceOnCurrentDrive} Б)");
-                var needSpace = GetDirectorySize(directoryPath);
-                _totalFileSizeFromServer = isCopyFromServer ? needSpace : _totalFileSizeFromServer;
-                _logger.Info($"Для успешного копирования файлов из папки {directoryPath} на текущем диске {drive} для текущего пользователя {userName} должно быть доступно не менее {((double)needSpace / 1024 / 1024).ToString("F2")} МБ ({needSpace} Б)");
-
-                if (freeSpaceOnCurrentDrive > needSpace)
+                try
                 {
-                    _logger.Info($"На текущем диске {drive} для текущего пользователя {userName} достаточно места для копирования папки {directoryPath}");
+                    var drive = Path.GetPathRoot(AppDomain.CurrentDomain.BaseDirectory);
+                    var userName = Environment.UserName;
+                    _logger.Info($"Попытка определить достаточно ли места для текущего пользователя {userName} на текущем диске {drive} для работы с папкой {directoryPath}");
+                    var freeSpaceOnCurrentDrive = new DriveInfo(drive).AvailableFreeSpace;
+                    _logger.Trace($"Для текущего пользователя {userName} на текущем диске {drive} доступно {((double)freeSpaceOnCurrentDrive / 1024 / 1024).ToString("F2")} МБ ({freeSpaceOnCurrentDrive} Б)");
+                    var needSpace = GetDirectorySize(directoryPath);
+                    _totalFileSizeFromServer = isCopyFromServer ? needSpace : _totalFileSizeFromServer;
+                    _logger.Trace($"Для успешной работы с файлами из папки {directoryPath} на текущем диске {drive} для текущего пользователя {userName} должно быть доступно не менее {((double)needSpace / 1024 / 1024).ToString("F2")} МБ ({needSpace} Б)");
+
+                    if (freeSpaceOnCurrentDrive > needSpace)
+                    {
+                        _logger.Info($"На текущем диске {drive} для текущего пользователя {userName} достаточно места для работы с папкой {directoryPath}");
+                        return null;
+                    }
+
+                    var message = $"На текущем диске {drive} для текущего пользователя {userName} недостаточно места для работы с папкой {directoryPath}. Необходимое количество памяти: не менее {((double)needSpace / 1024 / 1024).ToString("F2")} МБ ({needSpace} Б)";
+                    _logger.Warn(message);
+                    if (MessageBoxResult.OK == MessageBox.Show($"{message}.\n\nОсвободите место и нажмите ОК для повтора.\nНажмите Отмена для попытки завершить процесс с имеющимся пространством (Это может повлиять на успешность переноса данных)", "Недостаточно места на диске", MessageBoxButton.OKCancel, MessageBoxImage.Warning, MessageBoxResult.OK, MessageBoxOptions.DefaultDesktopOnly))
+                    {
+                        _logger.Trace($"Пользователем предпринята ещё одна попытка определить количество свободного пространства для работы с папкой {directoryPath}");
+                    }
+                    else
+                    {
+                        _logger.Warn($"Пользователь отменил работу с папкой {directoryPath} при недостаточном количестве свободного места на диске.");
+                        return message;
+                    }
+
+                }
+                catch (Exception ex)
+                {
+                    _logger.Warn($"При попытке определить достаточно ли места на диске для работы с папкой {directoryPath} возникла ошибка {ex.Message}. Работы с данной папкой может завершиться неудачей");
                     return null;
                 }
-
-                var message = $"На текущем диске {drive} для текущего пользователя {userName} НЕ достаточно места для копирования папки {directoryPath}. Копирование не возможно";
-                _logger.Warn(message);
-                return message;
-            }
-            catch (Exception ex)
-            {
-                _logger.Warn($"При попытке определить достаточно ли места на диске для копирования папки {directoryPath} возникла ошибка {ex.Message}. Копирование может завершиться неудачей");
-                return null;
             }
         }
 
@@ -559,9 +675,10 @@ namespace AsuUpdater.Classes
             string result;
             try
             {
-                _logger.Info($"Попытка десериализации JSON-файла {filePath} для ключа {keyName}");
-                string json = System.IO.File.ReadAllText(filePath, Encoding.UTF8);
+                _logger.Trace($"Попытка десериализации JSON-файла {filePath} для ключа {keyName}");
+                string json = File.ReadAllText(filePath, Encoding.UTF8);
                 result = JsonConvert.DeserializeObject<Dictionary<string, string>>(json)[keyName];
+                _logger.Trace($"Успешная десериализация JSON-файла {filePath} для ключа {keyName}");
             }
             catch (Exception ex)
             {
@@ -571,49 +688,98 @@ namespace AsuUpdater.Classes
             return result;
         }
 
-        private void DirectoryDelete(string directoryPath, bool isCopyFromServer = false)
+        private void FileDelete(FileInfo file)
         {
-            if (isCopyFromServer)
+            if (file.Exists)
             {
-                _logger.Info($"Попытка удаления папки {directoryPath}");
-            }
-            if (Directory.Exists(directoryPath))
-            {
-                bool result = false;
-                while (!result)
+                _logger.Trace($"Попытка удаления файла {file.FullName}");
+                while (true)
                 {
                     try
                     {
-                        Message = "Удаление временных файлов и папок…";
-                        Directory.Delete(directoryPath, true);
-                        if (isCopyFromServer)
-                        {
-                            _logger.Info($"Успешное удаление папки {directoryPath}");
-                        }
-                        Message = "Успешное удаление временных файлов и папок";
-                        result = true;
+                        File.Delete(file.FullName);
+                        _logger.Trace($"Успешное удаление файла {file.FullName}");
+                        break;
                     }
                     catch (Exception ex)
                     {
-                        _logger.Warn($"При попытке удаления папки {directoryPath} возникла ошибка {ex.Message}");
-                        if (MessageBoxResult.OK == MessageBox.Show($"Ошибка манипуляций с папкой {directoryPath}.\nВозможно, папка открыта или используется файл из папки.\n{ex.Message}.\n\nПопробуйте закрыть папку или открытые файлы из папки и нажмите ОК для повтора.\nНажмите Отмена для отмены обновления", "Ошибка доступа", MessageBoxButton.OKCancel, MessageBoxImage.Warning, MessageBoxResult.OK, MessageBoxOptions.DefaultDesktopOnly))
+                        _logger.Warn($"При попытке удаления файла {file.FullName} возникла ошибка {ex.Message}");
+                        if (MessageBoxResult.OK == MessageBox.Show($"Ошибка доступа к файлу {file.FullName}.\nВозможно, файл используется.\n{ex.Message}.\n\nЗакройте файл и нажмите ОК для повтора.\nНажмите Отмена чтобы пропустить файл", "Ошибка доступа", MessageBoxButton.OKCancel, MessageBoxImage.Warning, MessageBoxResult.OK, MessageBoxOptions.DefaultDesktopOnly))
                         {
-                            _logger.Info($"Пользователем предпринята ещё одна попытка удаления папки {directoryPath}");
+                            _logger.Trace($"Пользователем предпринята ещё одна попытка удаления файла {file.FullName}");
                         }
                         else
                         {
-                            _logger.Warn($"Пользователь отменил удаление при невозможности удалить папку {directoryPath}");
+                            _logger.Warn($"Пользователь отменил удаление файла {file.FullName} при ошибке доступа");
                             throw;
                         }
                     }
                 }
             }
-            else
+        }
+
+        private void DirectoryDelete(string directoryPath)
+        {
+            if (Directory.Exists(directoryPath))
             {
-                if (isCopyFromServer)
+                _logger.Trace($"Попытка удаления папки {directoryPath}");
+                while (true)
                 {
-                    _logger.Info($"Папка {directoryPath} не найдена");
+                    try
+                    {
+                        Directory.Delete(directoryPath, true);
+                        _logger.Trace($"Успешное удаление папки {directoryPath}");
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Warn($"При попытке удаления папки {directoryPath} возникла ошибка {ex.Message}");
+                        if (MessageBoxResult.OK == MessageBox.Show($"Ошибка доступа к папке {directoryPath}.\nВозможно, папка открыта или используется файл из папки.\n{ex.Message}.\n\nЗакройте папку и открытые файлы из папки и нажмите ОК для повтора.\nНажмите Отмена для попытки завершить процесс без доступа к папке (Это может повлиять на успешность переноса данных)", "Ошибка доступа", MessageBoxButton.OKCancel, MessageBoxImage.Warning, MessageBoxResult.OK, MessageBoxOptions.DefaultDesktopOnly))
+                        {
+                            _logger.Trace($"Пользователем предпринята ещё одна попытка удаления папки {directoryPath}");
+                        }
+                        else
+                        {
+                            _logger.Warn($"Пользователь отменил удаление папки {directoryPath} при ошибке доступа");
+                            throw;
+                        }
+                    }
                 }
+            }
+        }
+
+        private string ClearLogs(string directoryPath)
+        {
+            try
+            {
+                var directory = new DirectoryInfo(directoryPath);
+                if (directory.Exists)
+                {
+                    var files = directory.GetFiles("*.log");
+                    var lastWriteDateTime = DateTime.Now;
+                    foreach (var file in files)
+                    {
+                        if (file.LastWriteTime < lastWriteDateTime)
+                        {
+                            lastWriteDateTime = file.LastWriteTime;
+                        }
+                    }
+
+                    if (files.Length > 0 && lastWriteDateTime < DateTime.Now.AddDays(-10))
+                    {
+                        foreach (var file in files)
+                        {
+                            FileDelete(file);
+                        }
+                        return $"Успешная очистка логов в папке {directoryPath}. Последняя запись в логах до чистки: {lastWriteDateTime}";
+                    }
+                    return $"Чистка логов в папке {directoryPath} не требуется ({(files.Length > 0 ? "Дата последней записи не превышает 10 дней" : "Файлы не найдены")})";
+                }
+                return $"Очистка логов не требуется. Папка с логами ({directoryPath}) не найдена";
+            }
+            catch (Exception ex)
+            {
+                return $"При попытке очистки логов в папке {directoryPath} возникла ошибка. {ex.Message}";
             }
         }
 
@@ -629,18 +795,20 @@ namespace AsuUpdater.Classes
                 _logger.Info("Начат процесс отмены изменений");
                 var errorDisconnectMessage = DisconnectFromServer(_sourceDirectoryPath, false);
                 _logger.Info($"Закрытие соединения: {errorDisconnectMessage ?? "Успешный разрыв соединения"}");
-                _logger.Info($"Попытка восстановить бэкап {_endDirectory} из {_endDirectory}{_endingForTempFolder}");
-                var copyResult = DirectoryCopy($"{_parentCurrentDirectoryPath}\\{_endDirectory}{_endingForTempFolder}", $"{_parentCurrentDirectoryPath}\\{_endDirectory}", false);
-                if (string.IsNullOrWhiteSpace(copyResult))
+                if (_wasConnected)
                 {
-                    _logger.Info($"Успешное восстановление бэкапа {_endDirectory} из {_endDirectory}{_endingForTempFolder}");
+                    _logger.Info($"Попытка восстановить резервную копию {_endDirectory} из {_endDirectory}{_partName}");
+                    var copyResult = DirectoryCopy($"{_parentCurrentDirectoryPath}\\{_endDirectory}{_partName}", $"{_parentCurrentDirectoryPath}\\{_endDirectory}", false);
+                    if (string.IsNullOrWhiteSpace(copyResult))
+                    {
+                        _logger.Info($"Успешное восстановление резервной копии {_endDirectory} из {_endDirectory}{_partName}");
+                        DirectoryDelete($"{ _parentCurrentDirectoryPath}\\{_endDirectory}{_partName}");
+                    }
+                    else
+                    {
+                        _logger.Warn($"Неудачное восстановление резервной копии {_endDirectory} из {_endDirectory}{_partName}. {copyResult}");
+                    }
                 }
-                else
-                {
-                    _logger.Warn($"Неудачное восстановление бэкапа {_endDirectory} из {_endDirectory}{_endingForTempFolder}. {copyResult}");
-                }
-
-                DirectoryDelete($"{ _parentCurrentDirectoryPath}\\{_endDirectory}{_endingForTempFolder}");
             }
             catch (Exception ex)
             {
@@ -678,9 +846,9 @@ namespace AsuUpdater.Classes
                 _logger.Info($"Создание ярлыка для {_endDirectory}\\{_runtimeFileName} на {shortcutPath}");
                 string shortcutLocation = Path.Combine(shortcutPath, $"{_runtimeFileName} — ярлык.lnk");
 
-                if (System.IO.File.Exists(shortcutLocation))
+                if (File.Exists(shortcutLocation))
                 {
-                    System.IO.File.Delete(shortcutLocation);
+                    FileDelete(new FileInfo(shortcutLocation));
                 }
 
                 WshShell shell = new WshShell();
@@ -719,30 +887,31 @@ namespace AsuUpdater.Classes
                 if (EmergencySituation && !EmergencyCompletion)
                 {
                     e.Cancel = true;
-                    _logger.Info("Закрытие программы обновления отменено: отмена изменений не окончена");
+                    _logger.Info("Закрытие программы обновления прервано: отмена изменений не окончена");
                     MessageBox.Show("Дождитесь окончания отмены изменений", "Дождитесь окончания отмены изменений", MessageBoxButton.OK, MessageBoxImage.Warning, MessageBoxResult.OK, MessageBoxOptions.DefaultDesktopOnly);
                     return;
                 }
 
                 _logger.Info("Программа обновления закрыта");
                 LogManager.DisableLogging();
-                DirectoryCopy($"{AppDomain.CurrentDomain.BaseDirectory}\\Logs", $"{_parentCurrentDirectoryPath}\\{_endDirectory}\\AsuUpdater\\Logs", false, false);
+                DirectoryCopy($"{AppDomain.CurrentDomain.BaseDirectory}Logs", $"{_parentCurrentDirectoryPath}\\{_endDirectory}\\AsuUpdater\\Logs", false, false);
             }
             else
             {
                 if (MessageBoxResult.OK == MessageBox.Show("Процесс обновления не завершен.\n\nОтменить обновление?", "Процесс прерывания обновления", MessageBoxButton.OKCancel, MessageBoxImage.Warning, MessageBoxResult.Cancel, MessageBoxOptions.DefaultDesktopOnly))
                 {
                     UpdateProcessIsRunning = false;
-                    _thread.Abort();//прерываем поток
-                    _thread.Join(1000);//таймаут на завершение
+                    _thread.Abort();//Прерываем поток
+                    _thread.Join(1000);//Таймаут на завершение
                     _thread = null;
                     EmergencyStop();
                     _logger.Info("Программа обновления закрыта");
                     LogManager.DisableLogging();
-                    DirectoryCopy($"{AppDomain.CurrentDomain.BaseDirectory}\\Logs", $"{_parentCurrentDirectoryPath}\\{_endDirectory}\\AsuUpdater\\Logs", false, false);
+                    DirectoryCopy($"{AppDomain.CurrentDomain.BaseDirectory}Logs", $"{_parentCurrentDirectoryPath}\\{_endDirectory}\\AsuUpdater\\Logs", false, false);
                 }
                 else
                 {
+                    _logger.Info("Закрытие программы отменено пользователем");
                     e.Cancel = true;
                 }
             }

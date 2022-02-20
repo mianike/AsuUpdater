@@ -33,11 +33,14 @@ namespace AsuUpdater
             var currentProcess = Process.GetCurrentProcess();
             if (Process.GetProcessesByName(currentProcess.ProcessName).Length > 1)
             {
-                MessageBox.Show("Запущено более одной копии программного обеспечения", "Ошибка запуска", MessageBoxButton.OK, MessageBoxImage.Warning, MessageBoxResult.OK, MessageBoxOptions.DefaultDesktopOnly);
+                MessageBox.Show($"Запущено более одной копии программного обеспечения {currentProcess.ProcessName}", "Ошибка запуска", MessageBoxButton.OK, MessageBoxImage.Warning, MessageBoxResult.OK, MessageBoxOptions.DefaultDesktopOnly);
                 currentProcess.Kill();
             }
 
-            UpdaterViewModel.ServerAddressFromArgument = args.Args?.Length > 0 ? args.Args[0] : null;
+            UpdaterViewModel.ServerAddressFromArgument = args.Args?.Length > 0 ? string.IsNullOrWhiteSpace(args.Args[0]) ? null : args.Args[0] : null;
+            UpdaterViewModel.ActualVersionPathFromArgument = args.Args?.Length > 1 ? string.IsNullOrWhiteSpace(args.Args[1]) ? null : args.Args[1] : null;
+            UpdaterViewModel.UserNameFromArgument = args.Args?.Length > 2 ? string.IsNullOrWhiteSpace(args.Args[2]) ? null : args.Args[2] : null;
+            UpdaterViewModel.UserPasswordFromArgument = args.Args?.Length > 3 ? string.IsNullOrWhiteSpace(args.Args[3]) ? null : args.Args[3] : null;
         }
     }
 }
