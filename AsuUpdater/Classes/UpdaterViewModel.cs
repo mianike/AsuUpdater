@@ -229,7 +229,7 @@ namespace AsuUpdater.Classes
                              $"\n\tПуть к актуальной версии программы на сервере ({(ActualVersionPathFromArgument != null ? "Передан аргументом обновляемой программой" : "Обновляемой программой аргументом не передан, получен из UpdaterService.json")}): {actualVersionPath}" +
                              $"\n\tПолный путь к актуальной версии: {_sourceDirectoryPath}\n\tЦелевая папка для обновления: {_endDirectory}" +
                              $"\n\tИмя пользователя для входа ({(UserNameFromArgument != null ? "Передано аргументом обновляемой программой" : "Обновляемой программой аргументом не передано, получено из UpdaterService.json")}): {_userName}" +
-                             $"\n\tПароль пользователя для входа ({(UserPasswordFromArgument!= null ? "Передан аргументом обновляемой программой" : "Обновляемой программой аргументом не передан, получен из UpdaterService.json")}): {_userPassword}" +
+                             $"\n\tПароль пользователя для входа ({(UserPasswordFromArgument != null ? "Передан аргументом обновляемой программой" : "Обновляемой программой аргументом не передан, получен из UpdaterService.json")}): {_userPassword}" +
                              $"\n\tПуть к файлу о версии внутри актуальной программы: {_aboutVersionPath}" +
                              $"\n\tИмя ключа для десериализации номера версии из файла о версии: {_versionKey}\n\tИмя ключа для десериализации данных о том, что нового в версии из файла о версии: {_whatIsNewKey}" +
                              $"\n\tНазвание папки для устаревших версий: {(!string.IsNullOrWhiteSpace(_directoryForOldVersion) ? _directoryForOldVersion : "Значение не задано. Старая версия при успешном обновлении будет удалена")}" +
@@ -272,9 +272,11 @@ namespace AsuUpdater.Classes
 
                     Message = "Получение данных об обновляемой версии…";
                     _logger.Info("Попытка получения номера обновляемой версии");
+                    string oldVersion = string.Empty;
                     _partName = DeserializeJson($"{_parentCurrentDirectoryPath}\\{_endDirectory}\\{_aboutVersionPath}", _versionKey);
                     if (!string.IsNullOrWhiteSpace(_partName))
                     {
+                        oldVersion = _partName;
                         _partName = _partName.Replace(".", "_");
                         _logger.Info($"Успешное получение номера обновляемой версии: {_partName}");
                     }
@@ -314,6 +316,10 @@ namespace AsuUpdater.Classes
                     if (!string.IsNullOrWhiteSpace(NewVersion))
                     {
                         _logger.Info($"Успешное получение номера актуальной версии: {NewVersion}");
+                        if (!string.IsNullOrWhiteSpace(oldVersion) && string.Equals(oldVersion, NewVersion, StringComparison.OrdinalIgnoreCase))
+                        {
+                            throw new Exception($"Версии программы в папке-источнике ({ _sourceDirectoryPath}) и целевой папке для обновления ({ _endDirectory}) совпадают. Возможно, новая версия программы хранится не в папке-источнике");
+                        }
                         VisWhatIsNew = true;
                     }
                     else
@@ -902,7 +908,7 @@ namespace AsuUpdater.Classes
                 {
                     UpdateProcessIsRunning = false;
                     _thread.Abort();//Прерываем поток
-                    _thread.Join(1000);//Таймаут на завершение
+                    _thread.Join(1500);//Таймаут на завершение
                     _thread = null;
                     EmergencyStop();
                     _logger.Info("Программа обновления закрыта");
