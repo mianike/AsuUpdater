@@ -22,8 +22,9 @@
                         </Style.Triggers>
                     </Style>
                 </Grid.Style>
-                <TextBlock Text="Перед началом процесса обновления убедитесь в том, что закрыты все папки и файлы связанные с обновляемой программой" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" VerticalAlignment="Top" FontSize="15" Margin="15,70,15,10"/>
+                <TextBlock Text="Перед началом процесса обновления убедитесь в том, что закрыты все папки и файлы, связанные с обновляемой программой" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" VerticalAlignment="Top" FontSize="15" Margin="15,70,15,10"/>
                 <TextBlock Text='Для запуска обновления нажмите кнопку "Обновить"' TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="15" Margin="15,70,15,10"/>
+                <CheckBox VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,150,0,0" IsChecked="{Binding NotSkipEqualFiles}" Content="Выполнить чистое обновление" ToolTip="Выполнить обновление всех файлов вне зависимости от изменений в них (процесс обновления займет больше времени)"/>
                 <Button VerticalAlignment="Bottom" Height="30" Width="150" Content="Обновить" FontWeight="Normal" FontFamily="Calibri" Foreground="#FF101010" FontSize="16">
                     <Button.Style>
                         <Style TargetType="{x:Type Button}">

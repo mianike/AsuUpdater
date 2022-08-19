@@ -194,6 +194,17 @@ namespace AsuUpdater.Classes
             }
         }
 
+        private bool _notSkipEqualFiles;
+        public bool NotSkipEqualFiles
+        {
+            get { return _notSkipEqualFiles; }
+            set
+            {
+                _notSkipEqualFiles = value;
+                OnPropertyChanged(nameof(NotSkipEqualFiles));
+            }
+        }
+
         public UpdaterViewModel()
         {
             try
@@ -318,7 +329,7 @@ namespace AsuUpdater.Classes
                         _logger.Info($"Успешное получение номера актуальной версии: {NewVersion}");
                         if (!string.IsNullOrWhiteSpace(oldVersion) && string.Equals(oldVersion, NewVersion, StringComparison.OrdinalIgnoreCase))
                         {
-                            throw new Exception($"Версии программы в папке-источнике ({ _sourceDirectoryPath}) и целевой папке для обновления ({ _endDirectory}) совпадают. Возможно, новая версия программы хранится не в папке-источнике");
+                            throw new Exception($"Версии программы в папке-источнике ({_sourceDirectoryPath}) и целевой папке для обновления ({_endDirectory}) совпадают ({NewVersion}). Возможно, новая версия программы хранится не в папке-источнике");
                         }
                         VisWhatIsNew = true;
                     }
@@ -525,11 +536,11 @@ namespace AsuUpdater.Classes
                     }
 
                     Directory.CreateDirectory(destinDirectoryPath);
-                    //Копируем из источника только те файлы, которых нет в целевой папке или которые отличаются по размеру и дате изменения
+                    //Копируем из источника только те файлы, которых нет в целевой папке или которые отличаются по размеру и дате изменения (если при старте не выбрано копировать все файлы)
                     foreach (var fileToCopy in filesToCopy)
                     {
-                        var existFile = destinDirectory.Exists ? destinDirectory.GetFiles(fileToCopy.Name) : null;
-                        if (existFile?.Length > 0 && existFile.First().Length == fileToCopy.Length && existFile.First().LastWriteTimeUtc == fileToCopy.LastWriteTimeUtc)
+                        var existFile = !NotSkipEqualFiles && destinDirectory.Exists ? destinDirectory.GetFiles(fileToCopy.Name)?.FirstOrDefault() : null;
+                        if (existFile?.Length > 0 && existFile.Length == fileToCopy.Length && existFile.LastWriteTimeUtc.Date.Equals(fileToCopy.LastWriteTimeUtc.Date) && existFile.LastWriteTimeUtc.Second.Equals(fileToCopy.LastWriteTimeUtc.Second))
                         {
                             _logger.Trace($"Пропущено копирование файла {fileToCopy.Name}. Данный файл с размером {fileToCopy.Length} и датой изменения (UTC) {fileToCopy.LastWriteTimeUtc} уже есть в каталоге {destinDirectoryPath} по такому относительному пути {destinDirectoryPath}\\{fileToCopy.Name}");
                             if (isCopyFromServer)
@@ -808,7 +819,7 @@ namespace AsuUpdater.Classes
                     if (string.IsNullOrWhiteSpace(copyResult))
                     {
                         _logger.Info($"Успешное восстановление резервной копии {_endDirectory} из {_endDirectory}{_partName}");
-                        DirectoryDelete($"{ _parentCurrentDirectoryPath}\\{_endDirectory}{_partName}");
+                        DirectoryDelete($"{_parentCurrentDirectoryPath}\\{_endDirectory}{_partName}");
                     }
                     else
                     {
